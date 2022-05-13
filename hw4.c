@@ -13,17 +13,36 @@
 #define NO_EINTR(stmt) while((stmt) < 0 && errno == EINTR);
 //global variables
 int semid;
-typedef struct consumer{
-    int id;
-    int N;
-} consumer;
+int consumerCount;
+int N;
+
+/*
+union semun {
+    int val;   
+    struct semid_ds *buf;    
+    unsigned short *array;
+    struct seminfo *__buf;
+}; */
+
+sig_atomic_t interruptHappened = 0;
+
+void sigIntHandler(int sigNum){
+    if(sigNum == SIGINT){
+        interruptHappened = 1;
+    }
+}
 
 void* consumer_thread(void* arg);
 void* producer_thread(void *arg);
 void get_timestamp(char *ts);
 
 int main(int argc, char *argv[]) {
-    setvbuf(stdout, NULL, _IONBF, 0);
+    struct sigaction sigAction;
+    memset(&sigAction, 0, sizeof(struct sigaction));
+    sigAction.sa_handler = sigIntHandler;
+    sigaction(SIGINT, &sigAction, NULL);
+    
+    setvbuf(stdout, NULL, _IONBF, 0);  //disable buffering
 
     //check argument validity ./hw4 -C 10 -N 5 -F inputfilePath
     if (argc != 7) {
@@ -50,6 +69,7 @@ int main(int argc, char *argv[]) {
     FILE *fp = fopen(input, "r");
     if (fp == NULL) {
         fprintf(stderr,"Error: File does not exist.\n");
+        free(input);
         exit(EXIT_FAILURE);
     }
 
@@ -57,6 +77,7 @@ int main(int argc, char *argv[]) {
     semid = semget(IPC_PRIVATE, 2, 0666 | IPC_CREAT | IPC_EXCL);
     if (semid == -1) {
         perror("Error, semget failed");
+        free(input);
         exit(EXIT_FAILURE);
     }
 
@@ -66,25 +87,23 @@ int main(int argc, char *argv[]) {
     
     if (semctl(semid, 0, SETVAL, sem_union) == -1) {
         perror("Error, semctl failed");
+        free(input);
         exit(EXIT_FAILURE);
     }
 
     sem_union.val = 0;
     if (semctl(semid, 0, SETVAL, sem_union) == -1) {
         perror("Error, semctl failed");
+        free(input);
         exit(EXIT_FAILURE);
     }
 
     //create C consumer threads
-    int consumerCount = atoi(argv[2]);
-    int N = atoi(argv[4]);
-    consumer **cons_struct = (struct consumer **) malloc(sizeof(consumer*) * consumerCount);
+    consumerCount = atoi(argv[2]);
+    N = atoi(argv[4]);
     pthread_t *consumers = (pthread_t *) malloc(consumerCount * sizeof(pthread_t));
     for (int i = 0; i < consumerCount; i++) {
-        cons_struct[i] = (struct consumer*) malloc(sizeof(consumer));
-        cons_struct[i]->id = i;
-        cons_struct[i]->N = N;
-        pthread_create(&consumers[i], NULL, (void *) consumer_thread, (void *) cons_struct[i]);
+        pthread_create(&consumers[i], NULL, (void *) consumer_thread, (void *) i);
     }
 
     //create a thread for producer
@@ -98,24 +117,23 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < consumerCount; i++) {
         pthread_join(consumers[i], NULL);
     }
-    pthread_join(supplier, NULL);
+
+    free(consumers);
+    free(input);
 
     //destroy semaphores
     if (semctl(semid, 0, IPC_RMID, 0) == -1) {
         perror("Error, semctl deletion fail");
         exit(EXIT_FAILURE);
     }
-
-    //free memory
-    free(cons_struct);
-    free(consumers);
 }
 
 void* producer_thread(void *arg){
     //read the file
     char* input = (char*) arg;
 
-    int fp = open(input, O_RDONLY);
+    int fp;
+    NO_EINTR(fp = open(input, O_RDONLY));
     if (fp == -1) {
         perror("Error, open failed");
         exit(EXIT_FAILURE);
@@ -126,9 +144,12 @@ void* producer_thread(void *arg){
     struct sembuf sem_buf;
     char ts[26];
     int r;
+    int byte_count = 0;
     
-    
-    while (read(fp, &c, 1) > 0) {
+    NO_EINTR(r = read(fp, &c, 1));
+    while (r > 0) {
+        byte_count++;
+        NO_EINTR(r = semop(semid, &sem_buf, 1));
         get_timestamp(ts);
         fprintf(stdout,"%s Supplier: read from input a ‘%c’. Current amounts: %d x ‘1’, %d ‘2’.\n", ts, c, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
         //if the character is 1, increment the corresponding semaphore
@@ -140,7 +161,7 @@ void* producer_thread(void *arg){
 
             if (r < 0) {
                 perror("Error, semop failed");
-                exit(EXIT_FAILURE);
+                break;
             }
         }
 
@@ -152,12 +173,33 @@ void* producer_thread(void *arg){
             NO_EINTR(semop(semid, &sem_buf, 1));
             if (r < 0) {
                 perror("Error, semop failed");
-                exit(EXIT_FAILURE);
+                break;
             }
         }
 
         get_timestamp(ts);
         fprintf(stdout,"%s Supplier: delivered a ‘%c’. Post-delivery amounts: %d x ‘1’, %d x ‘2’.\n", ts, c, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));  
+        NO_EINTR(r = read(fp, &c, 1));
+        if(interruptHappened) {
+            break;
+        }
+    }
+
+    //prevent deadlock situation
+    if(byte_count < N * consumerCount * 2 || interruptHappened) {
+        interruptHappened = 1;
+        union semun sem_union;
+        sem_union.array = (unsigned short *) malloc(sizeof(unsigned short) * 2);
+        sem_union.array[0] = consumerCount;
+        sem_union.array[1] = consumerCount;
+        
+        if(semctl(semid, 0, SETALL, sem_union) < 0) {
+            perror("Error, semctl failed");
+            free(sem_union.array);
+            exit(EXIT_FAILURE);
+        }
+        
+        free(sem_union.array);
     }
 
     //close the file
@@ -169,7 +211,7 @@ void* producer_thread(void *arg){
 }
 
 void* consumer_thread(void* arg){
-    consumer *cons_struct = (consumer*)arg;
+    int id = (int) arg;
     struct sembuf sem_buf[2];
     sem_buf[0].sem_num = 0;
     sem_buf[0].sem_op = -1;
@@ -181,23 +223,27 @@ void* consumer_thread(void* arg){
     char ts[26];
     int r;
         
-    for (int i = 0; i < cons_struct->N; i++)
+    for (int i = 0; i < N; i++)
     {
         get_timestamp(ts);
-        fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, cons_struct->id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
         //read the semaphores if one of them is not available wait
         NO_EINTR(r = semop(semid, sem_buf, 2));
         if (r < 0) {
             perror("Error, semop failed");
-            exit(EXIT_FAILURE);
+            break;
+        }
+
+        if(interruptHappened) {
+            break;
         }
 
         get_timestamp(ts);
-        fprintf(stdout,"%s Consumer-%d at iteration %d (consumed). Post-consumption amounts: %d x ‘1’, %d x ‘2’.\n", ts, cons_struct->id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Consumer-%d at iteration %d (consumed). Post-consumption amounts: %d x ‘1’, %d x ‘2’.\n", ts, id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
     }
 
     get_timestamp(ts);
-    fprintf(stdout,"%s Consumer-%d has left.\n", ts, cons_struct->id);
+    fprintf(stdout,"%s Consumer-%d has left.\n", ts, id);
     pthread_exit(NULL);
 }
 
