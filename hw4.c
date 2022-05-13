@@ -103,9 +103,13 @@ int main(int argc, char *argv[]) {
     //create C consumer threads
     consumerCount = atoi(argv[2]);
     N = atoi(argv[4]);
+    int **id = (int**)malloc(sizeof(int*) * consumerCount);
+
     pthread_t *consumers = (pthread_t *) malloc(consumerCount * sizeof(pthread_t));
     for (int i = 0; i < consumerCount; i++) {
-        pthread_create(&consumers[i], NULL, (void *) consumer_thread, (void *) i);
+        id[i] = (int*)malloc(sizeof(int));
+        *(id[i]) = i;
+        pthread_create(&consumers[i], NULL, (void *) consumer_thread, (void *) id[i]);
     }
 
     //create a thread for producer
@@ -122,6 +126,11 @@ int main(int argc, char *argv[]) {
 
     free(consumers);
     free(input);
+    //free id 2D array
+    for (int i = 0; i < consumerCount; i++) {
+        free(id[i]);
+    }
+    free(id);
 
     //destroy semaphores
     if (semctl(semid, 0, IPC_RMID, 0) == -1) {
@@ -151,7 +160,6 @@ void* producer_thread(void *arg){
     NO_EINTR(r = read(fp, &c, 1));
     while (r > 0) {
         byte_count++;
-        NO_EINTR(r = semop(semid, &sem_buf, 1));
         get_timestamp(ts);
         fprintf(stdout,"%s Supplier: read from input a ‘%c’. Current amounts: %d x ‘1’, %d ‘2’.\n", ts, c, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
         //if the character is 1, increment the corresponding semaphore
@@ -172,7 +180,7 @@ void* producer_thread(void *arg){
             sem_buf.sem_num = 1;
             sem_buf.sem_op = 1;
             sem_buf.sem_flg = 0;
-            NO_EINTR(semop(semid, &sem_buf, 1));
+            NO_EINTR(r = semop(semid, &sem_buf, 1));
             if (r < 0) {
                 perror("Error, semop failed");
                 break;
@@ -213,7 +221,7 @@ void* producer_thread(void *arg){
 }
 
 void* consumer_thread(void* arg){
-    int id = (int) arg;
+    int *id = (int*) arg;
     struct sembuf sem_buf[2];
     sem_buf[0].sem_num = 0;
     sem_buf[0].sem_op = -1;
@@ -228,7 +236,7 @@ void* consumer_thread(void* arg){
     for (int i = 0; i < N; i++)
     {
         get_timestamp(ts);
-        fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, *id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
         //read the semaphores if one of them is not available wait
         NO_EINTR(r = semop(semid, sem_buf, 2));
         if (r < 0) {
@@ -241,11 +249,11 @@ void* consumer_thread(void* arg){
         }
 
         get_timestamp(ts);
-        fprintf(stdout,"%s Consumer-%d at iteration %d (consumed). Post-consumption amounts: %d x ‘1’, %d x ‘2’.\n", ts, id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Consumer-%d at iteration %d (consumed). Post-consumption amounts: %d x ‘1’, %d x ‘2’.\n", ts, *id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
     }
 
     get_timestamp(ts);
-    fprintf(stdout,"%s Consumer-%d has left.\n", ts, id);
+    fprintf(stdout,"%s Consumer-%d has left.\n", ts, *id);
     pthread_exit(NULL);
 }
 
