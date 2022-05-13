@@ -9,6 +9,7 @@
 #include <time.h>
 #include <unistd.h> //open, read
 #include <errno.h>
+#include <signal.h>
  
 #define NO_EINTR(stmt) while((stmt) < 0 && errno == EINTR);
 //global variables
