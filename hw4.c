@@ -13,9 +13,9 @@
  
 #define NO_EINTR(stmt) while((stmt) < 0 && errno == EINTR);
 //global variables
-int semid;
-int consumerCount;
-int N;
+int semid = 0;
+int consumerCount = 0;
+int N = 0;
 
 /*
 union semun {
@@ -156,12 +156,22 @@ void* producer_thread(void *arg){
     char ts[26];
     int r;
     int byte_count = 0;
+    int val1;
+    int val2;
     
     NO_EINTR(r = read(fp, &c, 1));
     while (r > 0) {
         byte_count++;
+
+        val1 = semctl(semid, 0, GETVAL, 0);
+        val2 = semctl(semid, 1, GETVAL, 0);
+                
+        if(val1 < 0 || val2 < 0){
+            break;
+        }
+        
         get_timestamp(ts);
-        fprintf(stdout,"%s Supplier: read from input a ‘%c’. Current amounts: %d x ‘1’, %d ‘2’.\n", ts, c, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Supplier: read from input a ‘%c’. Current amounts: %d x ‘1’, %d ‘2’.\n", ts, c, val1, val2);
         //if the character is 1, increment the corresponding semaphore
         if (c == '1') {
             sem_buf.sem_num = 0;
@@ -186,37 +196,37 @@ void* producer_thread(void *arg){
                 break;
             }
         }
-
+        val1 = semctl(semid, 0, GETVAL, 0);
+        val2 = semctl(semid, 1, GETVAL, 0);
+                
+        if(val1 < 0 || val2 < 0){
+            break;
+        }
         get_timestamp(ts);
-        fprintf(stdout,"%s Supplier: delivered a ‘%c’. Post-delivery amounts: %d x ‘1’, %d x ‘2’.\n", ts, c, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));  
+        fprintf(stdout,"%s Supplier: delivered a ‘%c’. Post-delivery amounts: %d x ‘1’, %d x ‘2’.\n", ts, c, val1, val2);  
         NO_EINTR(r = read(fp, &c, 1));
-        if(interruptHappened) {
+        if(interruptHappened || r < 0) {
             break;
         }
     }
 
     //prevent deadlock situation
-    if(byte_count < N * consumerCount * 2 || interruptHappened) {
+    if(N * consumerCount * 2 > byte_count || interruptHappened) {
         interruptHappened = 1;
         union semun sem_union;
         sem_union.array = (unsigned short *) malloc(sizeof(unsigned short) * 2);
         sem_union.array[0] = consumerCount;
         sem_union.array[1] = consumerCount;
-        
-        if(semctl(semid, 0, SETALL, sem_union) < 0) {
-            perror("Error, semctl failed");
-            free(sem_union.array);
-            exit(EXIT_FAILURE);
-        }
-        
+        semctl(semid, 0, SETALL, sem_union);
         free(sem_union.array);
     }
-
+    
     //close the file
     close(fp);
     //terminate thread
     get_timestamp(ts);
     fprintf(stdout,"%s The Supplier has left.\n", ts);
+
     pthread_exit(NULL);
 }
 
@@ -231,12 +241,17 @@ void* consumer_thread(void* arg){
     sem_buf[1].sem_flg = 0;
 
     char ts[26];
-    int r;
+    int r, val1, val2;
         
     for (int i = 0; i < N; i++)
     {
+        val1 = semctl(semid, 0, GETVAL, 0);
+        val2 = semctl(semid, 1, GETVAL, 0);
+        if(val1 < 0 || val2 < 0){
+            break;
+        }
         get_timestamp(ts);
-        fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, *id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, *id, i, val1, val2);
         //read the semaphores if one of them is not available wait
         NO_EINTR(r = semop(semid, sem_buf, 2));
         if (r < 0) {
@@ -248,8 +263,10 @@ void* consumer_thread(void* arg){
             break;
         }
 
+        val1 = semctl(semid, 0, GETVAL, 0);
+        val2 = semctl(semid, 1, GETVAL, 0);
         get_timestamp(ts);
-        fprintf(stdout,"%s Consumer-%d at iteration %d (consumed). Post-consumption amounts: %d x ‘1’, %d x ‘2’.\n", ts, *id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
+        fprintf(stdout,"%s Consumer-%d at iteration %d (consumed). Post-consumption amounts: %d x ‘1’, %d x ‘2’.\n", ts, *id, i, val1, val2);
     }
 
     get_timestamp(ts);
