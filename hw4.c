@@ -17,14 +17,6 @@ int semid = 0;
 int consumerCount = 0;
 int N = 0;
 
-/*
-union semun {
-    int val;   
-    struct semid_ds *buf;    
-    unsigned short *array;
-    struct seminfo *__buf;
-}; */
-
 sig_atomic_t interruptHappened = 0;
 
 void sigIntHandler(int sigNum){
@@ -59,7 +51,7 @@ int main(int argc, char *argv[]) {
 
     //check if the arguments are valid
     if (atoi(argv[2]) <= 4 || atoi(argv[4]) <= 1) {
-        fprintf(stderr,"Error: Invalid arguments. It should be like ./hw4 -C 10 -N 5 -F inputfilePath.\n");
+        fprintf(stderr,"Error: The format should be N > 1 and C > 4 ./hw4 -C 10 -N 5 -F inputfilePath.\n");
         exit(EXIT_FAILURE);
     }
 

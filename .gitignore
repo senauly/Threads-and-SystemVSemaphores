@@ -57,3 +57,4 @@ dkms.conf
 .vscode/settings.json
 .vscode/targets.log
 .vscode/dryrun.log
+.DS_Store
