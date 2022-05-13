@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h> //open, read
+#include <errno.h>
  
 #define NO_EINTR(stmt) while((stmt) < 0 && errno == EINTR);
 //global variables
@@ -62,13 +63,14 @@ int main(int argc, char *argv[]) {
     //initialize the semaphores
     union semun sem_union;
     sem_union.val = 0;
+    
     if (semctl(semid, 0, SETVAL, sem_union) == -1) {
         perror("Error, semctl failed");
         exit(EXIT_FAILURE);
     }
 
     sem_union.val = 0;
-    if (semctl(semid, 1, SETVAL, sem_union) == -1) {
+    if (semctl(semid, 0, SETVAL, sem_union) == -1) {
         perror("Error, semctl failed");
         exit(EXIT_FAILURE);
     }
@@ -123,6 +125,8 @@ void* producer_thread(void *arg){
     char c;
     struct sembuf sem_buf;
     char ts[26];
+    int r;
+    
     
     while (read(fp, &c, 1) > 0) {
         get_timestamp(ts);
@@ -132,7 +136,9 @@ void* producer_thread(void *arg){
             sem_buf.sem_num = 0;
             sem_buf.sem_op = 1;
             sem_buf.sem_flg = 0;
-            if (semop(semid, &sem_buf, 1) == -1) {
+            NO_EINTR(r = semop(semid, &sem_buf, 1));
+
+            if (r < 0) {
                 perror("Error, semop failed");
                 exit(EXIT_FAILURE);
             }
@@ -143,7 +149,8 @@ void* producer_thread(void *arg){
             sem_buf.sem_num = 1;
             sem_buf.sem_op = 1;
             sem_buf.sem_flg = 0;
-            if (semop(semid, &sem_buf, 1) == -1) {
+            NO_EINTR(semop(semid, &sem_buf, 1));
+            if (r < 0) {
                 perror("Error, semop failed");
                 exit(EXIT_FAILURE);
             }
@@ -172,13 +179,15 @@ void* consumer_thread(void* arg){
     sem_buf[1].sem_flg = 0;
 
     char ts[26];
+    int r;
         
     for (int i = 0; i < cons_struct->N; i++)
     {
         get_timestamp(ts);
         fprintf(stdout,"%s Consumer-%d at iteration %d (waiting). Current amounts: %d x ‘1’, %d x ‘2’.\n", ts, cons_struct->id, i, semctl(semid, 0, GETVAL, 0), semctl(semid, 1, GETVAL, 0));
         //read the semaphores if one of them is not available wait
-        if (semop(semid, sem_buf, 2) == -1) {
+        NO_EINTR(r = semop(semid, sem_buf, 2));
+        if (r < 0) {
             perror("Error, semop failed");
             exit(EXIT_FAILURE);
         }
