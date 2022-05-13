@@ -9,7 +9,7 @@
 #include <time.h>
 #include <unistd.h> //open, read
 #include <errno.h>
-#include <signal.h>
+#include <signal.h>         
  
 #define NO_EINTR(stmt) while((stmt) < 0 && errno == EINTR);
 //global variables
@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
         free(input);
         exit(EXIT_FAILURE);
     }
+    fclose(fp);
 
     //create systemV semaphores for 2 materials
     semid = semget(IPC_PRIVATE, 2, 0666 | IPC_CREAT | IPC_EXCL);
